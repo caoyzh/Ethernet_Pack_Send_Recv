@@ -12,6 +12,7 @@ with no error detection (ie. CRC)
 #include <arpa/inet.h>
 #include <linux/if_packet.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
 #include <sys/ioctl.h>
@@ -19,11 +20,11 @@ with no error detection (ie. CRC)
 #include <net/if.h>
 #include <netinet/ether.h>
 
-#define BUF_SIZ		65536
+#define BUFFER_MAX		65535
 #define SEND 0
 #define RECV 1
 
-void send_message(char if_name[], struct sockaddr_ll sk_addr, char hw_addr[], char payload[]){
+void send_message(char if_name[], char hw_addr[], char payload[]){
 	// create socket
 	int sockfd = -1;
 	if((sockfd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL)))<0){
@@ -56,11 +57,14 @@ void send_message(char if_name[], struct sockaddr_ll sk_addr, char hw_addr[], ch
 	}
 
 	// pack frame header
-	unsigned char buff[BUF_SIZ];
+	unsigned char buff[BUFFER_MAX + 1];
 	char *eth_header = (char *)&frame;
+	memset(buff, 0, sizeof(buff));
 	strncpy(buff,eth_header,strlen(eth_header)+1);
 	strncat(&buff[14],payload,strlen(payload)+1);
 
+	struct sockaddr_ll sk_addr;
+	memset(&sk_addr, 0, sizeof(struct sockaddr_ll));
 
 	sk_addr.sll_ifindex = if_idx.ifr_ifindex;
 	sk_addr.sll_halen = ETH_ALEN;
@@ -68,47 +72,69 @@ void send_message(char if_name[], struct sockaddr_ll sk_addr, char hw_addr[], ch
 	printf("%d bytes sent!\n", byteSent);
 }
 
-void recv_message(char if_name[], struct sockaddr_ll sk_addr){
-	int sockfd = -1;
-	if((sockfd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL)))<0){
-		perror("socket() failed!");
-	}
+void recv_message(char if_name[]){
+    int sockfd;
+    char buff[BUFFER_MAX];
+    struct sockaddr_ll sk_addr;
+    struct ifreq ifstruct;
 
-	struct ifreq if_idx;
-	memset(&if_idx,0,sizeof(struct ifreq));
-	strncpy(if_idx.ifr_name, if_name, IFNAMSIZ-1);
-	if(ioctl(sockfd, SIOCGIFINDEX, &if_idx) < 0){
+    printf("[Date:%s] Time:%s \n", __DATE__, __TIME__);
+
+    if ((sockfd = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ALL))) < 0)
+    {
+        fprintf(stdout, "create socket error\n");
+        return;
+    }
+
+    memset(&sk_addr, 0, sizeof(sk_addr));
+    sk_addr.sll_family = PF_PACKET;
+    sk_addr.sll_protocol = htons(ETH_P_ALL);
+    strcpy(ifstruct.ifr_name, if_name);
+    if(ioctl(sockfd, SIOCGIFINDEX, &ifstruct) < 0){
 		perror("SIOCGIFINDEX");
 	}
+    sk_addr.sll_ifindex = ifstruct.ifr_ifindex;
 
-	if(ioctl(sockfd, SIOCGIFHWADDR, &if_idx) < 0){
-		perror("SIOCGIFINDEX");
+    strcpy(ifstruct.ifr_name, if_name);
+    if(ioctl(sockfd, SIOCGIFHWADDR, &ifstruct) < 0){
+		perror("SIOCGIFHWADDR");
 	}
+    memcpy(sk_addr.sll_addr, ifstruct.ifr_ifru.ifru_hwaddr.sa_data, ETH_ALEN);
 
-	unsigned char buff[BUF_SIZ];
-	int sk_addr_size = sizeof(struct sockaddr_ll);
-	printf("Receiving...\n");
-	int recvLen = recvfrom(sockfd, buff, BUF_SIZ, 0 , (struct sockaddr*)&sk_addr, &sk_addr_size);
-	
-	printf("%d bytes received!\n", recvLen);
+    sk_addr.sll_halen = ETH_ALEN;
 
-	unsigned char src_mac[6];
-	memcpy(src_mac, &buff[6], 6);
-	
-	unsigned char payload[BUF_SIZ];
-	memcpy(payload, &buff[14], BUF_SIZ-sizeof(struct ether_header));
+    if (bind(sockfd, (struct sockaddr *)&sk_addr, sizeof(sk_addr)) == -1)
+    {
+        printf("bind:   ERROR\n");
+        return;
+    }
 
-	printf("Message: %s\n",payload);
-	printf("Source MAC: [%X][%X][%X][%X][%X][%X]\n",src_mac[0],src_mac[1],src_mac[2],src_mac[3],src_mac[4],src_mac[5]);
+    int byteRead = 0;
+    while (byteRead <= 0)
+    {
+        byteRead = recvfrom(sockfd, buff, BUFFER_MAX, 0, NULL, NULL);
+        if (byteRead <= 0)
+        {
+            continue;
+        }
+
+		unsigned char src_mac[6];
+		// unsigned char dst_mac[6];
+		memcpy(src_mac, &buff[6], 6);
+		// memcpy(dst_mac, &buff[0], 6);
+        printf("Source MAC: [%X][%X][%X][%X][%X][%X]\n",src_mac[0],src_mac[1],src_mac[2],src_mac[3],src_mac[4],src_mac[5]);
+		// printf("Dest MAC  : [%X][%X][%X][%X][%X][%X]\n",dst_mac[0],dst_mac[1],dst_mac[2],dst_mac[3],dst_mac[4],dst_mac[5]);
+        printf("Message: %s\n", &buff[14]);
+    }
 }
 
 int main(int argc, char *argv[])
 {
 	int mode;
-	char buff[BUF_SIZ];
+	char buff[BUFFER_MAX];
 	char hw_addr[6];
 	char interfaceName[IFNAMSIZ];
-	memset(buff, 0, BUF_SIZ);
+	memset(buff, 0, BUFFER_MAX);
 	
 	int correct=0;
 	if (argc > 1){
@@ -116,7 +142,7 @@ int main(int argc, char *argv[])
 			if (argc == 5){
 				mode=SEND; 
 				sscanf(argv[3], "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", &hw_addr[0], &hw_addr[1], &hw_addr[2], &hw_addr[3], &hw_addr[4], &hw_addr[5]);
-				strncpy(buff, argv[4], BUF_SIZ);
+				strncpy(buff, argv[4], BUFFER_MAX);
 				printf("Sending payload: %s\n", buff);
 				correct=1;
 			}
@@ -130,20 +156,16 @@ int main(int argc, char *argv[])
 		strncpy(interfaceName, argv[2], IFNAMSIZ);
 	 }
 	 if(!correct){
-		fprintf(stderr, "./455_proj2 Send <InterfaceName>  <DestHWAddr> <Message>\n");
-		fprintf(stderr, "./455_proj2 Recv <InterfaceName>\n");
+		fprintf(stderr, "Send <InterfaceName> <DestHWAddr> <Message>\n");
+		fprintf(stderr, "Recv <InterfaceName>\n");
 		exit(1);
 	 }
 
-	struct sockaddr_ll sk_addr;
-	memset(&sk_addr, 0, sizeof(struct sockaddr_ll));
-
-
 	if(mode == SEND){
-		send_message(interfaceName, sk_addr, hw_addr, buff);
+		send_message(interfaceName, hw_addr, buff);
 	}
 	else if (mode == RECV){
-		recv_message(interfaceName, sk_addr);
+		recv_message(interfaceName);
 	}
 
 	return 0;

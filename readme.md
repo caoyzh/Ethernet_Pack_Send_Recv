@@ -16,10 +16,11 @@ Example: ./eth_comm Recv h1-eth0
 
 5. On the host you with to send from, prepare the following command:
 ./eth_comm Send <host interface name> <dest MAC> <message>
-Example: ./eth_comm Send h2-eth0 5e:6a:b4:ac:9e:aa 'Hello world!'
+Example: ./eth_comm Send [mac address] 'Hello world!'
 
 6. Run the command on the receive side, then on the send side immediately after
 
+   ![image-20220908192621148](C:\Users\cyz00379\AppData\Roaming\Typora\typora-user-images\image-20220908192621148.png)
 
 Extra:
 If you wish to see the actual packets being sent, use Wireshark.
